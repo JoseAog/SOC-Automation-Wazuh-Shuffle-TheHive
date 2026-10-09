@@ -1,0 +1,8 @@
+{
+  "type": "wazuh_alert",
+  "source": "Wazuh",
+  "sourceRef": "$exec.id",
+  "title": "Alerta Wazuh: $exec.text.json.rule.description",
+  "description": "Agente: $exec.text.json.agent.name ($exec.text.json.agent.ip)\nRegla: $exec.text.json.rule.id - Nivel $exec.text.json.rule.level",
+  "severity": 2
+}
