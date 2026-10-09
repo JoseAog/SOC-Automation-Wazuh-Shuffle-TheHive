@@ -1,0 +1,19 @@
+# Docker / Local logs
+*.log
+.env
+.env.local
+
+# Temp files & OS specific
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
+
+# VS Code / IDE settings
+.vscode/
+.idea/
+
+# Certs & Secrets (por seguridad)
+*.pem
+*.key
+*.crt
