@@ -1,0 +1,179 @@
+version: '3.8'
+
+services:
+  wazuh.indexer:
+    image: wazuh/wazuh-indexer:4.7.2
+    container_name: wazuh.indexer
+    restart: unless-stopped
+    environment:
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - wazuh-indexer-data:/var/lib/wazuh-indexer
+      - ./wazuh-indexer-config/opensearch.yml:/usr/share/wazuh-indexer/opensearch.yml
+      - ./indexer-certs/indexer.pem:/usr/share/wazuh-indexer/certs/indexer.pem
+      - ./indexer-certs/indexer-key.pem:/usr/share/wazuh-indexer/certs/indexer-key.pem
+      - ./indexer-certs/admin.pem:/usr/share/wazuh-indexer/certs/admin.pem
+      - ./indexer-certs/admin-key.pem:/usr/share/wazuh-indexer/certs/admin-key.pem
+      - ./indexer-certs/root-ca.pem:/usr/share/wazuh-indexer/certs/root-ca.pem
+    ports:
+      - "9200:9200"
+
+  wazuh.manager:
+    image: wazuh/wazuh-manager:4.7.2
+    container_name: wazuh.manager
+    restart: unless-stopped
+    ports:
+      - "1514:1514"
+      - "1515:1515"
+      - "55000:55000"
+    volumes:
+      - wazuh-manager-data:/var/ossec/data
+      - ./indexer-certs/root-ca.pem:/etc/filebeat-certs/root-ca.pem
+      - ./filebeat.yml:/etc/filebeat/filebeat.yml
+      - ./wazuh-template.json:/etc/filebeat/wazuh-template.json:ro
+      - ./custom-shuffle:/var/ossec/integrations/custom-shuffle:ro
+      - ./integration-service:/etc/services.d/add-integration:ro
+
+  wazuh.dashboard:
+    image: wazuh/wazuh-dashboard:4.7.2
+    container_name: wazuh.dashboard
+    restart: unless-stopped
+    ports:
+      - "443:5601"
+    volumes:
+      - ./wazuh-dashboard-config/opensearch_dashboards.yml:/usr/share/wazuh-dashboard/config/opensearch_dashboards.yml
+      - ./wazuh-dashboard-app-config/wazuh.yml:/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml:ro
+      - ./dashboard-certs/dashboard.pem:/usr/share/wazuh-dashboard/config/certs/dashboard.pem
+      - ./dashboard-certs/dashboard-key.pem:/usr/share/wazuh-dashboard/config/certs/dashboard-key.pem
+      - ./dashboard-certs/root-ca.pem:/usr/share/wazuh-dashboard/config/certs/root-ca.pem
+    depends_on:
+      - wazuh.indexer
+      - wazuh.manager
+
+  shuffle-opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    container_name: shuffle-opensearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - cluster.name=shuffle-cluster
+      - bootstrap.memory_lock=true
+      - plugins.security.disabled=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9201:9200"
+    volumes:
+      - shuffle-opensearch-data:/usr/share/opensearch/data
+
+  shuffle-backend:
+    image: ghcr.io/shuffle/shuffle-backend:1.4.0
+    container_name: shuffle-backend
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    environment:
+      - BACKEND_HOSTNAME=shuffle-backend
+      - SHUFFLE_OPENSEARCH_URL=http://shuffle-opensearch:9200
+      - SHUFFLE_CLOUDSYNC=false
+      - SHUFFLE_ELASTIC=true
+    depends_on:
+      - shuffle-opensearch
+
+  shuffle-frontend:
+    image: ghcr.io/shuffle/shuffle-frontend:1.4.0
+    container_name: shuffle-frontend
+    restart: unless-stopped
+    ports:
+      - "3001:80"
+      - "3443:443"
+    depends_on:
+      - shuffle-backend
+    environment:
+      - BACKEND_HOSTNAME=shuffle-backend
+
+  shuffle-orborus:
+    image: ghcr.io/shuffle/shuffle-orborus:1.4.0
+    container_name: shuffle-orborus
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT_NAME=Shuffle
+      - BASE_URL=http://shuffle-backend:5001
+      - DOCKER_API_VERSION=1.40
+      - SHUFFLE_APP_SDK_TIMEOUT=300
+      - SHUFFLE_LOGS_DISABLED=false
+      - ORG_ID=
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - shuffle-backend
+
+  thehive-cassandra:
+    image: cassandra:4.1
+    container_name: thehive-cassandra
+    restart: unless-stopped
+    environment:
+      - MAX_HEAP_SIZE=512M
+      - HEAP_NEWSIZE=128M
+      - CASSANDRA_CLUSTER_NAME=thp
+    volumes:
+      - thehive-cassandra-data:/var/lib/cassandra
+    ports:
+      - "9042:9042"
+
+  thehive-elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.13
+    container_name: thehive-elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - xpack.security.enabled=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - thehive-elasticsearch-data:/usr/share/elasticsearch/data
+    ports:
+      - "9202:9200"
+
+  thehive:
+    image: strangebee/thehive:5.2
+    container_name: thehive
+    restart: unless-stopped
+    depends_on:
+      - thehive-cassandra
+      - thehive-elasticsearch
+    environment:
+      - JVM_OPTS=-Xms512m -Xmx512m
+    command:
+      - --secret
+      - "02f74749b0d7fd1b12ccf3b71d3088d7bc6603aa85d7ae3332fdd3225c5eb557"
+      - --cql-hostnames
+      - thehive-cassandra
+      - --index-backend
+      - elasticsearch
+      - --es-hostnames
+      - thehive-elasticsearch
+    volumes:
+      - thehive-data:/opt/thp/thehive/data
+      - thehive-index:/opt/thp/thehive/index
+    ports:
+      - "9000:9000"
+
+volumes:
+  wazuh-indexer-data:
+  wazuh-manager-data:
+  shuffle-opensearch-data:
+  thehive-cassandra-data:
+  thehive-elasticsearch-data:
+  thehive-data:
+  thehive-index:
